@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Headcount Challenge</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="logo">
+      <span class="logo-icon">🏢</span>
+      <span class="logo-text">HEADCOUNT<span class="logo-accent">CHALLENGE</span></span>
+    </div>
+    <nav class="nav-auth" id="navAuth">
+      <button class="btn btn-ghost" id="btnLogin">Log In</button>
+      <button class="btn btn-primary" id="btnRegister">Register</button>
+    </nav>
+    <div class="nav-user hidden" id="navUser">
+      <span class="user-greeting" id="userGreeting"></span>
+      <button class="btn btn-ghost" id="btnLogout">Log Out</button>
+    </div>
+  </header>
+
+  <!-- JACKPOT HERO -->
+  <section class="hero">
+    <div class="jackpot-label">💰 JACKPOT IS NOW</div>
+    <div class="jackpot-amount" id="jackpotAmount">$0</div>
+    <div class="jackpot-sub" id="jackpotSub">Be the first to bet and grow the pot!</div>
+  </section>
+
+  <!-- TODAY'S GAME -->
+  <section class="today-section">
+    <div class="today-card">
+      <div class="today-header">
+        <h2>📅 Today's Game</h2>
+        <div class="today-date" id="todayDate"></div>
+      </div>
+
+      <div class="stats-row">
+        <div class="stat">
+          <div class="stat-value" id="statBetCount">0</div>
+          <div class="stat-label">Players In</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="statCutoff">11:30 AM</div>
+          <div class="stat-label">Bet Cutoff</div>
+        </div>
+        <div class="stat">
+          <div class="stat-value" id="statStreak">—</div>
+          <div class="stat-label">Days No Winner</div>
+        </div>
+      </div>
+
+      <!-- Bet form (shown when logged in and no bet placed and before cutoff) -->
+      <div id="betSection">
+        <div class="bet-prompt hidden" id="betForm">
+          <p class="bet-instruction">How many people will show up before <strong>12:00 PM</strong> today?<br/>Exact number wins. Each entry adds <strong>$1</strong> to the jackpot.</p>
+          <div class="bet-input-row">
+            <input type="number" id="betInput" class="bet-input" placeholder="Enter a number" min="0" max="999" />
+            <button class="btn btn-gold" id="btnPlaceBet">🔒 Lock It In</button>
+          </div>
+        </div>
+
+        <div class="bet-locked hidden" id="betLocked">
+          <div class="locked-icon">🔒</div>
+          <div class="locked-text">Your bet is locked in:</div>
+          <div class="locked-number" id="lockedNumber">—</div>
+          <div class="locked-sub">Good luck! Results at noon.</div>
+        </div>
+
+        <div class="bet-closed hidden" id="betClosed">
+          <div class="closed-icon">⏰</div>
+          <div class="closed-text">Betting is closed for today.</div>
+          <div class="closed-sub">Come back tomorrow to place your bet!</div>
+        </div>
+
+        <div class="bet-login-prompt hidden" id="betLoginPrompt">
+          <p>👆 <strong>Log in or register</strong> to place your bet!</p>
+        </div>
+      </div>
+
+      <!-- Result banner (shown after admin resolves) -->
+      <div class="result-banner hidden" id="resultBanner"></div>
+    </div>
+  </section>
+
+  <!-- ADMIN PANEL -->
+  <section class="admin-panel hidden" id="adminPanel">
+    <div class="admin-card">
+      <h2>🔑 Admin Panel</h2>
+      <p>Enter the actual headcount at or after 12:00 PM to resolve today's game.</p>
+      <div class="admin-input-row">
+        <input type="number" id="adminCountInput" class="bet-input" placeholder="Actual headcount" min="0" max="999" />
+        <button class="btn btn-primary" id="btnResolve">Resolve Today</button>
+      </div>
+      <div class="admin-status" id="adminStatus"></div>
+    </div>
+  </section>
+
+  <!-- ALL BETS (shown after resolution) -->
+  <section class="bets-section hidden" id="betsSection">
+    <h2>📋 Today's Bets</h2>
+    <div class="bets-table-wrap">
+      <table class="bets-table" id="betsTable">
+        <thead>
+          <tr>
+            <th>Player</th>
+            <th>Guess</th>
+            <th>Result</th>
+          </tr>
+        </thead>
+        <tbody id="betsBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- HISTORY CHART -->
+  <section class="history-section">
+    <h2>📊 Game History</h2>
+    <div class="chart-wrap">
+      <canvas id="historyChart"></canvas>
+    </div>
+    <div class="history-table-wrap">
+      <table class="history-table" id="historyTable">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>Actual Count</th>
+            <th>Winner</th>
+            <th>Jackpot</th>
+          </tr>
+        </thead>
+        <tbody id="historyBody"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- LEADERBOARD -->
+  <section class="leaderboard-section">
+    <h2>🏆 Leaderboard</h2>
+    <div class="leaderboard-list" id="leaderboardList">
+      <p class="muted">No winners yet. Be the first!</p>
+    </div>
+  </section>
+
+  <!-- LOGIN MODAL -->
+  <div class="modal-overlay hidden" id="loginModal">
+    <div class="modal">
+      <button class="modal-close" id="closeLogin">✕</button>
+      <h2>Welcome Back</h2>
+      <p class="modal-sub">Log in to place your bet</p>
+      <input type="email" id="loginEmail" class="form-input" placeholder="Email" />
+      <input type="password" id="loginPassword" class="form-input" placeholder="Password" />
+      <button class="btn btn-gold full-width" id="submitLogin">Log In</button>
+      <p class="modal-footer">No account? <a href="#" id="switchToRegister">Register here</a></p>
+      <div class="form-error hidden" id="loginError"></div>
+    </div>
+  </div>
+
+  <!-- REGISTER MODAL -->
+  <div class="modal-overlay hidden" id="registerModal">
+    <div class="modal">
+      <button class="modal-close" id="closeRegister">✕</button>
+      <h2>Create Account</h2>
+      <p class="modal-sub">Join the game — it's free!</p>
+      <input type="text" id="regUsername" class="form-input" placeholder="Username (shown to others)" />
+      <input type="email" id="regEmail" class="form-input" placeholder="Email" />
+      <input type="password" id="regPassword" class="form-input" placeholder="Password (min 6 chars)" />
+      <button class="btn btn-gold full-width" id="submitRegister">Create Account</button>
+      <p class="modal-footer">Have an account? <a href="#" id="switchToLogin">Log in here</a></p>
+      <div class="form-error hidden" id="registerError"></div>
+    </div>
+  </div>
+
+  <footer>
+    <p>Headcount Challenge &mdash; Friendly bets only. No real money involved. 🏢</p>
+  </footer>
+
+  <script src="app.js"></script>
+</body>
+</html>
