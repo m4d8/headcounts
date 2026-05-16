@@ -3,14 +3,14 @@
 const SUPABASE_URL      = 'https://wtgdzqdntauluvvtunfd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qo01DgyYTMT856qOfCrv8w_WsC3WCCF';
 
-// Game settings
-const BET_COST          = 1;    // virtual dollars added to pot per bet
-const BET_CUTOFF_HOUR   = 11;   // 24h. Bets close at this hour:minute
-const BET_CUTOFF_MINUTE = 30;
+// Game constants
+const BET_COST = 5;       // $5 per bet
+const BET_MAX  = 500;     // max guess value
 
-// Admin: the FIRST user to register becomes admin (set in DB trigger).
-// You can also promote later via:
-//   UPDATE profiles SET is_admin = true WHERE username = 'you';
+// Cutoff time is loaded from app_settings (admin editable). Defaults below
+// are used only until the first load completes.
+let cutoffHour   = 11;
+let cutoffMinute = 30;
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 if (SUPABASE_URL.startsWith('YOUR_') || SUPABASE_ANON_KEY.startsWith('YOUR_')) {
@@ -25,12 +25,12 @@ if (SUPABASE_URL.startsWith('YOUR_') || SUPABASE_ANON_KEY.startsWith('YOUR_')) {
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-let currentUser = null;
+let currentUser    = null;
 let currentProfile = null;
-let isAdmin = false;
-let todayGame = null;
-let userBet = null;
-let historyChart = null;
+let isAdmin        = false;
+let todayGame      = null;
+let userBet        = null;
+let historyChart   = null;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 const $ = id => document.getElementById(id);
@@ -38,31 +38,31 @@ const show = id => $(id).classList.remove('hidden');
 const hide = id => $(id).classList.add('hidden');
 
 function todayDate() {
-  // Local-date YYYY-MM-DD (so "today" matches the user's wall clock)
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
 }
-
 function formatDate(dateStr) {
   return new Date(dateStr + 'T12:00:00').toLocaleDateString('en-US', {
     weekday: 'short', month: 'short', day: 'numeric', year: 'numeric'
   });
 }
-
-function isBettingOpen() {
+function formatTime(h, m) {
+  const period = h >= 12 ? 'PM' : 'AM';
+  const hour12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${hour12}:${String(m).padStart(2,'0')} ${period}`;
+}
+function msUntilCutoff() {
   const now = new Date();
-  return now.getHours() < BET_CUTOFF_HOUR ||
-    (now.getHours() === BET_CUTOFF_HOUR && now.getMinutes() < BET_CUTOFF_MINUTE);
+  const cutoff = new Date(now);
+  cutoff.setHours(cutoffHour, cutoffMinute, 0, 0);
+  return cutoff - now;
 }
+function isBettingOpen() { return msUntilCutoff() > 0; }
 
-function setError(elId, msg) {
-  const el = $(elId);
-  el.textContent = msg;
-  el.classList.remove('hidden');
-}
-function clearError(elId) { $(elId).classList.add('hidden'); }
+function setError(elId, msg) { const el=$(elId); el.textContent=msg; el.classList.remove('hidden'); }
+function clearError(elId)    { $(elId).classList.add('hidden'); }
 
-// ── Auth UI wiring ───────────────────────────────────────────────────────────
+// ── Auth UI ──────────────────────────────────────────────────────────────────
 $('btnLogin').addEventListener('click', () => { clearError('loginError'); show('loginModal'); });
 $('btnRegister').addEventListener('click', () => { clearError('registerError'); show('registerModal'); });
 $('btnLogout').addEventListener('click', async () => { await db.auth.signOut(); });
@@ -70,68 +70,62 @@ $('closeLogin').addEventListener('click', () => hide('loginModal'));
 $('closeRegister').addEventListener('click', () => hide('registerModal'));
 $('switchToRegister').addEventListener('click', e => { e.preventDefault(); hide('loginModal'); show('registerModal'); });
 $('switchToLogin').addEventListener('click', e => { e.preventDefault(); hide('registerModal'); show('loginModal'); });
-['loginModal','registerModal'].forEach(id => {
+['loginModal','registerModal','keypadModal'].forEach(id => {
   $(id).addEventListener('click', e => { if (e.target === $(id)) hide(id); });
 });
 
-// Login
 $('submitLogin').addEventListener('click', async () => {
   clearError('loginError');
   const email = $('loginEmail').value.trim();
   const pass  = $('loginPassword').value;
   if (!email || !pass) { setError('loginError', 'Please fill in all fields.'); return; }
-
-  $('submitLogin').textContent = 'Logging in…';
   $('submitLogin').disabled = true;
+  $('submitLogin').textContent = 'Logging in…';
   const { error } = await db.auth.signInWithPassword({ email, password: pass });
-  $('submitLogin').textContent = 'Log In';
   $('submitLogin').disabled = false;
-
+  $('submitLogin').textContent = 'Log In';
   if (error) { setError('loginError', error.message); return; }
   hide('loginModal');
 });
 
-// Register
 $('submitRegister').addEventListener('click', async () => {
   clearError('registerError');
   const username = $('regUsername').value.trim();
   const email    = $('regEmail').value.trim();
   const pass     = $('regPassword').value;
-
   if (!username || !email || !pass) { setError('registerError', 'Please fill in all fields.'); return; }
   if (pass.length < 6) { setError('registerError', 'Password must be at least 6 characters.'); return; }
   if (!/^[a-zA-Z0-9_]{2,24}$/.test(username)) {
     setError('registerError', 'Username: 2-24 letters, numbers, or underscores.'); return;
   }
-
-  $('submitRegister').textContent = 'Creating account…';
   $('submitRegister').disabled = true;
-  // Username is passed via metadata; the DB trigger creates the profile row.
+  $('submitRegister').textContent = 'Creating account…';
   const { data, error } = await db.auth.signUp({
     email, password: pass,
     options: { data: { username } }
   });
-  $('submitRegister').textContent = 'Create Account';
   $('submitRegister').disabled = false;
-
+  $('submitRegister').textContent = 'Create Account';
   if (error) { setError('registerError', error.message); return; }
-
   hide('registerModal');
-  if (data.session) {
-    // Email confirmation off — already logged in
-    // refreshUI fires via onAuthStateChange
-  } else {
-    alert('Account created! Check your email to confirm, then log in.');
-  }
+  if (!data.session) alert('Account created! Check your email to confirm, then log in.');
 });
 
-// Auth state
 db.auth.onAuthStateChange(async (_event, session) => {
   currentUser = session?.user ?? null;
   await refreshUI();
 });
 
 // ── Data layer ───────────────────────────────────────────────────────────────
+async function loadSettings() {
+  const { data } = await db.from('app_settings').select('*');
+  if (!data) return;
+  const h = data.find(d => d.key === 'cutoff_hour');
+  const m = data.find(d => d.key === 'cutoff_minute');
+  if (h) cutoffHour   = parseInt(h.value, 10);
+  if (m) cutoffMinute = parseInt(m.value, 10);
+}
+
 async function getProfile(userId) {
   if (!userId) return null;
   const { data } = await db.from('profiles').select('*').eq('id', userId).maybeSingle();
@@ -139,43 +133,30 @@ async function getProfile(userId) {
 }
 
 async function getRolloverFromPrevious() {
-  // Rollover = (most-recent resolved game's final pot) if it had no winner, else 0
   const { data } = await db.from('game_days')
     .select('jackpot_amount, winner_user_id')
     .eq('is_resolved', true)
     .lt('game_date', todayDate())
     .order('game_date', { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(1).maybeSingle();
   if (!data) return 0;
   return data.winner_user_id ? 0 : (Number(data.jackpot_amount) || 0);
 }
 
 async function getOrCreateTodayGame() {
   const date = todayDate();
-
-  // Try fetch
-  let { data: game } = await db.from('game_days')
-    .select('*').eq('game_date', date).maybeSingle();
-
+  let { data: game } = await db.from('game_days').select('*').eq('game_date', date).maybeSingle();
   if (game) return game;
-
-  // Need to create — only authenticated users can (RLS). Anon viewers just see $0.
   if (!currentUser) return null;
 
   const rollover = await getRolloverFromPrevious();
   const { data: inserted, error } = await db.from('game_days').insert({
-    game_date: date,
-    rollover_amount: rollover,
-    bet_count: 0,
-    jackpot_amount: 0,
-    is_resolved: false
+    game_date: date, rollover_amount: rollover, bet_count: 0,
+    jackpot_amount: 0, is_resolved: false
   }).select().maybeSingle();
 
   if (error) {
-    // Possibly a race — re-fetch
-    const { data: again } = await db.from('game_days')
-      .select('*').eq('game_date', date).maybeSingle();
+    const { data: again } = await db.from('game_days').select('*').eq('game_date', date).maybeSingle();
     return again;
   }
   return inserted;
@@ -184,26 +165,18 @@ async function getOrCreateTodayGame() {
 async function getUserBet(gameDayId) {
   if (!currentUser || !gameDayId) return null;
   const { data } = await db.from('bets')
-    .select('*')
-    .eq('user_id', currentUser.id)
-    .eq('game_day_id', gameDayId)
-    .maybeSingle();
+    .select('*').eq('user_id', currentUser.id).eq('game_day_id', gameDayId).maybeSingle();
   return data;
 }
 
 async function getStreakDaysNoWinner() {
   const { data } = await db.from('game_days')
-    .select('winner_user_id, game_date')
-    .eq('is_resolved', true)
-    .order('game_date', { ascending: false })
-    .limit(30);
-  if (!data || data.length === 0) return 0;
-  let streak = 0;
-  for (const g of data) {
-    if (!g.winner_user_id) streak++;
-    else break;
-  }
-  return streak;
+    .select('winner_user_id').eq('is_resolved', true)
+    .order('game_date', { ascending: false }).limit(30);
+  if (!data) return 0;
+  let s = 0;
+  for (const g of data) { if (!g.winner_user_id) s++; else break; }
+  return s;
 }
 
 function computeJackpot(game) {
@@ -211,32 +184,99 @@ function computeJackpot(game) {
   return (Number(game.rollover_amount) || 0) + (game.bet_count || 0) * BET_COST;
 }
 
-// ── Place Bet ─────────────────────────────────────────────────────────────────
-$('btnPlaceBet').addEventListener('click', async () => {
-  const val = parseInt($('betInput').value, 10);
-  if (isNaN(val) || val < 0 || val > 9999) {
-    alert('Please enter a valid number (0–9999).'); return;
+// ── Keypad ───────────────────────────────────────────────────────────────────
+let keypadValue = '';
+
+function openKeypad() {
+  if (!currentUser) { alert('Please log in first.'); return; }
+  if (!isBettingOpen()) { alert('Betting is closed for today.'); return; }
+  keypadValue = '';
+  clearError('keypadError');
+  updateKeypadDisplay();
+  show('keypadModal');
+}
+
+function updateKeypadDisplay() {
+  $('keypadDisplay').textContent = keypadValue === '' ? '—' : keypadValue;
+  $('keypadOk').disabled = keypadValue === '';
+}
+
+function handleDigit(digit) {
+  let next;
+  if (keypadValue === '' || keypadValue === '0') next = digit;
+  else next = keypadValue + digit;
+  if (parseInt(next, 10) > BET_MAX) return;
+  if (next.length > 3) return;
+  keypadValue = next;
+  updateKeypadDisplay();
+}
+
+document.querySelectorAll('[data-digit]').forEach(btn => {
+  btn.addEventListener('click', () => handleDigit(btn.dataset.digit));
+});
+$('keypadBack').addEventListener('click', () => {
+  keypadValue = keypadValue.slice(0, -1);
+  updateKeypadDisplay();
+});
+$('keypadClear').addEventListener('click', () => {
+  keypadValue = '';
+  updateKeypadDisplay();
+});
+$('closeKeypad').addEventListener('click', () => hide('keypadModal'));
+$('btnOpenKeypad').addEventListener('click', openKeypad);
+
+// Keyboard support
+document.addEventListener('keydown', e => {
+  if ($('keypadModal').classList.contains('hidden')) return;
+  if (/^[0-9]$/.test(e.key)) { handleDigit(e.key); e.preventDefault(); }
+  else if (e.key === 'Backspace') { keypadValue = keypadValue.slice(0,-1); updateKeypadDisplay(); e.preventDefault(); }
+  else if (e.key === 'Escape')  { hide('keypadModal'); }
+  else if (e.key === 'Enter')   { if (!$('keypadOk').disabled) $('keypadOk').click(); }
+});
+
+$('keypadOk').addEventListener('click', async () => {
+  clearError('keypadError');
+  const val = parseInt(keypadValue, 10);
+  if (isNaN(val) || val < 0 || val > BET_MAX) {
+    setError('keypadError', `Pick a number from 0 to ${BET_MAX}.`); return;
   }
-  if (!todayGame) { alert('No active game yet — please refresh.'); return; }
-  if (!isBettingOpen()) { alert('Betting has closed for today.'); return; }
+  if (!todayGame) { setError('keypadError', 'No active game yet. Refresh and try again.'); return; }
+  if (!isBettingOpen()) { setError('keypadError', 'Betting closed.'); return; }
 
-  $('btnPlaceBet').textContent = 'Locking in…';
-  $('btnPlaceBet').disabled = true;
-
+  $('keypadOk').disabled = true;
+  $('keypadOk').textContent = 'Locking in…';
   const { error } = await db.from('bets').insert({
     user_id: currentUser.id,
     game_day_id: todayGame.id,
     predicted_count: val
   });
-
-  $('btnPlaceBet').textContent = '🔒 Lock It In';
-  $('btnPlaceBet').disabled = false;
+  $('keypadOk').textContent = '🔒 Lock In ($5)';
+  $('keypadOk').disabled = false;
 
   if (error) {
-    if (error.code === '23505') alert('You already placed a bet today!');
-    else alert('Error placing bet: ' + error.message);
+    if (error.code === '23505') setError('keypadError', 'You already placed a bet today!');
+    else setError('keypadError', error.message);
     return;
   }
+  hide('keypadModal');
+  await refreshUI();
+});
+
+// ── Admin: Cutoff settings ───────────────────────────────────────────────────
+$('btnSaveCutoff').addEventListener('click', async () => {
+  const h = parseInt($('cutoffHourInput').value, 10);
+  const m = parseInt($('cutoffMinuteInput').value, 10);
+  if (isNaN(h) || h < 0 || h > 23 || isNaN(m) || m < 0 || m > 59) {
+    $('settingsStatus').textContent = 'Invalid time.'; return;
+  }
+  $('settingsStatus').textContent = 'Saving…';
+  const { error } = await db.from('app_settings').upsert([
+    { key: 'cutoff_hour',   value: String(h) },
+    { key: 'cutoff_minute', value: String(m) }
+  ]);
+  if (error) { $('settingsStatus').textContent = 'Error: ' + error.message; return; }
+  cutoffHour = h; cutoffMinute = m;
+  $('settingsStatus').textContent = `✅ Saved — cutoff now ${formatTime(h, m)}`;
   await refreshUI();
 });
 
@@ -252,53 +292,99 @@ $('btnResolve').addEventListener('click', async () => {
   $('adminStatus').textContent = 'Resolving…';
   $('btnResolve').disabled = true;
 
-  // Re-fetch latest game state for accurate bet_count
-  const { data: fresh } = await db.from('game_days')
-    .select('*').eq('id', todayGame.id).maybeSingle();
+  const { data: fresh } = await db.from('game_days').select('*').eq('id', todayGame.id).maybeSingle();
   const liveGame = fresh || todayGame;
   const jackpot = computeJackpot(liveGame);
 
-  // Fetch all bets (admin RLS allows). Earliest correct guess wins the pot.
   const { data: bets } = await db.from('bets')
-    .select('*')
-    .eq('game_day_id', liveGame.id)
-    .order('created_at', { ascending: true });
-
+    .select('*').eq('game_day_id', liveGame.id).order('created_at', { ascending: true });
   const winner = (bets || []).find(b => b.predicted_count === actual) || null;
 
   const { error } = await db.from('game_days').update({
-    is_resolved: true,
-    actual_count: actual,
-    jackpot_amount: jackpot,
+    is_resolved: true, actual_count: actual, jackpot_amount: jackpot,
     winner_user_id: winner ? winner.user_id : null
   }).eq('id', liveGame.id);
-
   $('btnResolve').disabled = false;
 
-  if (error) {
-    $('adminStatus').textContent = '❌ Error: ' + error.message;
-    return;
-  }
+  if (error) { $('adminStatus').textContent = '❌ Error: ' + error.message; return; }
 
-  // Look up winner username for status message
   let winnerName = '';
-  if (winner) {
-    const wp = await getProfile(winner.user_id);
-    winnerName = wp?.username || 'Unknown';
-  }
-
+  if (winner) { const wp = await getProfile(winner.user_id); winnerName = wp?.username || 'Unknown'; }
   $('adminStatus').textContent = winner
     ? `✅ Winner: ${winnerName}! Jackpot of $${jackpot} awarded.`
-    : `❌ No winners. $${jackpot} rolls over to next game.`;
+    : `❌ No winners. $${jackpot} rolls over.`;
 
   await refreshUI();
 });
 
+// ── Admin: bets management (paid toggle, delete) ─────────────────────────────
+async function renderAdminBets() {
+  if (!isAdmin || !todayGame) { return; }
+  const { data: bets } = await db.from('bets')
+    .select('*').eq('game_day_id', todayGame.id).order('created_at', { ascending: true });
+
+  const tbody = $('adminBetsBody');
+  tbody.innerHTML = '';
+  $('paidSummary').textContent = '';
+
+  if (!bets || bets.length === 0) {
+    tbody.innerHTML = '<tr><td colspan="4" class="muted">No bets yet today.</td></tr>';
+    return;
+  }
+
+  const userIds = [...new Set(bets.map(b => b.user_id))];
+  const { data: profiles } = await db.from('profiles').select('id, username').in('id', userIds);
+  const nameOf = id => profiles?.find(p => p.id === id)?.username || 'Unknown';
+
+  const paidCount = bets.filter(b => b.paid).length;
+  $('paidSummary').textContent = `${paidCount}/${bets.length} paid`;
+
+  bets.forEach(b => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td>${nameOf(b.user_id)}</td>
+      <td><strong>${b.predicted_count}</strong></td>
+      <td>
+        <label class="paid-toggle ${b.paid ? 'paid' : 'unpaid'}">
+          <input type="checkbox" data-paid-bet="${b.id}" ${b.paid ? 'checked' : ''} />
+          <span>${b.paid ? '✓ Paid' : 'Unpaid'}</span>
+        </label>
+      </td>
+      <td><button class="btn-icon" data-delete-bet="${b.id}" title="Remove bet">🗑️</button></td>`;
+    tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll('[data-paid-bet]').forEach(cb => {
+    cb.addEventListener('change', async () => {
+      const betId = cb.dataset.paidBet;
+      cb.disabled = true;
+      const { error } = await db.from('bets').update({ paid: cb.checked }).eq('id', betId);
+      cb.disabled = false;
+      if (error) { alert('Error updating: ' + error.message); cb.checked = !cb.checked; return; }
+      refreshUI();
+    });
+  });
+
+  tbody.querySelectorAll('[data-delete-bet]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      if (!confirm("Remove this bet? They won't get a refund automatically — handle that with the player.")) return;
+      btn.disabled = true;
+      const { error } = await db.from('bets').delete().eq('id', btn.dataset.deleteBet);
+      btn.disabled = false;
+      if (error) { alert('Error deleting: ' + error.message); return; }
+      refreshUI();
+    });
+  });
+}
+
 // ── Render UI ────────────────────────────────────────────────────────────────
 async function refreshUI() {
+  await loadSettings();
   $('todayDate').textContent = formatDate(todayDate());
+  $('statCutoff').textContent = formatTime(cutoffHour, cutoffMinute);
+  $('cutoffHourInput').value   = cutoffHour;
+  $('cutoffMinuteInput').value = cutoffMinute;
 
-  // Auth nav + profile
   if (currentUser) {
     hide('navAuth'); show('navUser');
     currentProfile = await getProfile(currentUser.id);
@@ -309,10 +395,8 @@ async function refreshUI() {
     currentProfile = null;
     isAdmin = false;
   }
-
   isAdmin ? show('adminPanel') : hide('adminPanel');
 
-  // Today's game
   todayGame = await getOrCreateTodayGame();
   const jackpot = computeJackpot(todayGame);
   const betCount = todayGame?.bet_count || 0;
@@ -332,14 +416,16 @@ async function refreshUI() {
     await renderBetSection();
   }
 
+  if (isAdmin) await renderAdminBets();
+
   await renderHistory();
   await renderLeaderboard();
+  updateCountdownText();
 }
 
 async function renderResolvedState(game, jackpot) {
   const banner = $('resultBanner');
   banner.classList.remove('hidden', 'winner', 'no-winner');
-
   hide('betForm'); hide('betLocked'); hide('betClosed'); hide('betLoginPrompt');
 
   if (game.winner_user_id) {
@@ -351,7 +437,6 @@ async function renderResolvedState(game, jackpot) {
     banner.classList.add('no-winner');
     banner.innerHTML = `❌ NO WINNERS on ${formatDate(game.game_date)} — actual count: <strong>${game.actual_count}</strong><br>JACKPOT IS NOW <strong>$${jackpot}</strong> (rolls over to next game)`;
   }
-
   await renderAllBets(game);
 }
 
@@ -360,20 +445,26 @@ async function renderBetSection() {
 
   if (!currentUser) {
     hide('betForm'); hide('betLocked'); hide('betClosed');
-    show('betLoginPrompt');
-    return;
+    show('betLoginPrompt'); return;
   }
-
   if (!isBettingOpen()) {
     hide('betForm'); hide('betLocked'); hide('betLoginPrompt');
-    show('betClosed');
-    return;
+    show('betClosed'); return;
   }
 
   userBet = await getUserBet(todayGame?.id);
   if (userBet) {
     hide('betForm'); hide('betClosed'); hide('betLoginPrompt');
     $('lockedNumber').textContent = userBet.predicted_count;
+    $('lockedDate').textContent = formatDate(todayDate());
+    const paidEl = $('lockedPayment');
+    if (userBet.paid) {
+      paidEl.textContent = '✓ Payment received';
+      paidEl.className = 'locked-payment paid';
+    } else {
+      paidEl.textContent = `💵 Pay $${BET_COST} to admin to confirm entry`;
+      paidEl.className = 'locked-payment unpaid';
+    }
     show('betLocked');
   } else {
     hide('betLocked'); hide('betClosed'); hide('betLoginPrompt');
@@ -389,7 +480,6 @@ async function renderAllBets(game) {
 
   if (!bets || bets.length === 0) { hide('betsSection'); return; }
 
-  // Resolve usernames in one query
   const userIds = [...new Set(bets.map(b => b.user_id))];
   const { data: profiles } = await db.from('profiles').select('id, username').in('id', userIds);
   const nameOf = id => profiles?.find(p => p.id === id)?.username || 'Unknown';
@@ -397,26 +487,20 @@ async function renderAllBets(game) {
   show('betsSection');
   const tbody = $('betsBody');
   tbody.innerHTML = '';
-
-  // Among exact-matchers, only the earliest gets the official winner badge,
-  // but all exact-matchers get a "🎯 Exact" tag.
-  const exactMatchers = bets.filter(b => b.predicted_count === game.actual_count);
   const officialWinnerId = game.winner_user_id;
 
   bets.forEach(b => {
     const isExact = b.predicted_count === game.actual_count;
     const isWinner = isExact && b.user_id === officialWinnerId;
-    const tr = document.createElement('tr');
-    let resultHtml;
-    if (isWinner) {
-      resultHtml = `<span class="tag-winner">🏆 Winner!</span>`;
-    } else if (isExact) {
-      resultHtml = `<span class="tag-winner">🎯 Exact (tied)</span>`;
-    } else {
+    let html;
+    if (isWinner) html = `<span class="tag-winner">🏆 Winner!</span>`;
+    else if (isExact) html = `<span class="tag-winner">🎯 Exact (tied)</span>`;
+    else {
       const diff = Math.abs(b.predicted_count - game.actual_count);
-      resultHtml = `<span class="tag-miss">Off by ${diff}</span>`;
+      html = `<span class="tag-miss">Off by ${diff}</span>`;
     }
-    tr.innerHTML = `<td>${nameOf(b.user_id)}</td><td><strong>${b.predicted_count}</strong></td><td>${resultHtml}</td>`;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${nameOf(b.user_id)}</td><td><strong>${b.predicted_count}</strong></td><td>${html}</td>`;
     tbody.appendChild(tr);
   });
 }
@@ -426,16 +510,13 @@ async function renderHistory() {
   const { data: games } = await db.from('game_days')
     .select('game_date, actual_count, jackpot_amount, winner_user_id')
     .eq('is_resolved', true)
-    .order('game_date', { ascending: false })
-    .limit(30);
+    .order('game_date', { ascending: false }).limit(30);
 
   if (!games || games.length === 0) {
     if (historyChart) { historyChart.destroy(); historyChart = null; }
-    $('historyBody').innerHTML = '';
-    return;
+    $('historyBody').innerHTML = ''; return;
   }
 
-  // Resolve usernames in one query
   const winnerIds = games.map(g => g.winner_user_id).filter(Boolean);
   let nameOf = () => null;
   if (winnerIds.length > 0) {
@@ -454,29 +535,28 @@ async function renderHistory() {
     data: {
       labels,
       datasets: [
-        { type: 'bar', label: 'Headcount', data: counts,
-          backgroundColor: 'rgba(96,165,250,0.5)', borderColor: '#60a5fa',
-          borderWidth: 1, yAxisID: 'y' },
-        { type: 'line', label: 'Jackpot ($)', data: jackpots,
-          borderColor: '#f5c518', backgroundColor: 'rgba(245,197,24,0.1)',
-          borderWidth: 2, pointRadius: 4, pointBackgroundColor: '#f5c518',
-          tension: 0.3, yAxisID: 'y2', fill: true }
+        { type:'bar', label:'Headcount', data:counts,
+          backgroundColor:'rgba(96,165,250,0.5)', borderColor:'#60a5fa',
+          borderWidth:1, yAxisID:'y' },
+        { type:'line', label:'Jackpot ($)', data:jackpots,
+          borderColor:'#f5c518', backgroundColor:'rgba(245,197,24,0.1)',
+          borderWidth:2, pointRadius:4, pointBackgroundColor:'#f5c518',
+          tension:0.3, yAxisID:'y2', fill:true }
       ]
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
-      interaction: { mode: 'index', intersect: false },
-      plugins: { legend: { labels: { color: '#e8e8f0', font: { size: 12 } } } },
-      scales: {
-        x:  { ticks: { color: '#6b6b8a', font: { size: 11 } }, grid: { color: '#2a2a42' } },
-        y:  { type: 'linear', position: 'left',
-              title: { display: true, text: 'Headcount', color: '#60a5fa' },
-              ticks: { color: '#6b6b8a' }, grid: { color: '#2a2a42' },
-              beginAtZero: true },
-        y2: { type: 'linear', position: 'right',
-              title: { display: true, text: 'Jackpot ($)', color: '#f5c518' },
-              ticks: { color: '#6b6b8a', callback: v => '$' + v },
-              grid: { drawOnChartArea: false }, beginAtZero: true }
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{ legend:{ labels:{ color:'#e8e8f0', font:{ size:12 } } } },
+      scales:{
+        x:{ ticks:{ color:'#6b6b8a', font:{ size:11 } }, grid:{ color:'#2a2a42' } },
+        y:{ type:'linear', position:'left',
+            title:{ display:true, text:'Headcount', color:'#60a5fa' },
+            ticks:{ color:'#6b6b8a' }, grid:{ color:'#2a2a42' }, beginAtZero:true },
+        y2:{ type:'linear', position:'right',
+            title:{ display:true, text:'Jackpot ($)', color:'#f5c518' },
+            ticks:{ color:'#6b6b8a', callback:v=>'$'+v },
+            grid:{ drawOnChartArea:false }, beginAtZero:true }
       }
     }
   });
@@ -484,14 +564,12 @@ async function renderHistory() {
   const tbody = $('historyBody');
   tbody.innerHTML = '';
   games.forEach(g => {
-    const winnerName = g.winner_user_id ? nameOf(g.winner_user_id) : null;
+    const wn = g.winner_user_id ? nameOf(g.winner_user_id) : null;
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${formatDate(g.game_date)}</td>
       <td><strong>${g.actual_count}</strong></td>
-      <td>${winnerName
-        ? `<span class="tag-winner">🏆 ${winnerName}</span>`
-        : `<span class="tag-miss">No winners</span>`}</td>
+      <td>${wn ? `<span class="tag-winner">🏆 ${wn}</span>` : `<span class="tag-miss">No winners</span>`}</td>
       <td>$${g.jackpot_amount}</td>`;
     tbody.appendChild(tr);
   });
@@ -500,55 +578,80 @@ async function renderHistory() {
 // ── Leaderboard ──────────────────────────────────────────────────────────────
 async function renderLeaderboard() {
   const { data: games } = await db.from('game_days')
-    .select('winner_user_id')
-    .eq('is_resolved', true)
+    .select('winner_user_id').eq('is_resolved', true)
     .not('winner_user_id', 'is', null);
-
   if (!games || games.length === 0) {
-    $('leaderboardList').innerHTML = '<p class="muted">No winners yet. Be the first!</p>';
-    return;
+    $('leaderboardList').innerHTML = '<p class="muted">No winners yet. Be the first!</p>'; return;
   }
-
-  // Count wins per user
   const counts = {};
-  games.forEach(g => { counts[g.winner_user_id] = (counts[g.winner_user_id] || 0) + 1; });
-
-  // Resolve usernames
+  games.forEach(g => { counts[g.winner_user_id] = (counts[g.winner_user_id]||0)+1; });
   const ids = Object.keys(counts);
   const { data: profiles } = await db.from('profiles').select('id, username').in('id', ids);
-  const sorted = Object.entries(counts)
-    .map(([id, wins]) => ({
-      name: profiles?.find(p => p.id === id)?.username || 'Unknown',
-      wins
-    }))
-    .sort((a, b) => b.wins - a.wins)
-    .slice(0, 10);
+  const sorted = Object.entries(counts).map(([id,w]) => ({
+    name: profiles?.find(p=>p.id===id)?.username || 'Unknown', wins:w
+  })).sort((a,b)=>b.wins-a.wins).slice(0,10);
 
-  const rankSymbols = ['🥇','🥈','🥉'];
-  const rankClasses = ['gold','silver','bronze'];
-  const list = $('leaderboardList');
-  list.innerHTML = '';
-  sorted.forEach((row, i) => {
-    const div = document.createElement('div');
-    div.className = 'leaderboard-item';
+  const sym=['🥇','🥈','🥉'], cls=['gold','silver','bronze'];
+  const list = $('leaderboardList'); list.innerHTML='';
+  sorted.forEach((r,i)=>{
+    const div=document.createElement('div'); div.className='leaderboard-item';
     div.innerHTML = `
-      <div class="lb-rank ${rankClasses[i] || ''}">${rankSymbols[i] || i + 1}</div>
-      <div class="lb-name">${row.name}</div>
-      <div class="lb-wins">${row.wins}<span>win${row.wins !== 1 ? 's' : ''}</span></div>`;
+      <div class="lb-rank ${cls[i]||''}">${sym[i]||i+1}</div>
+      <div class="lb-name">${r.name}</div>
+      <div class="lb-wins">${r.wins}<span>win${r.wins!==1?'s':''}</span></div>`;
     list.appendChild(div);
   });
 }
 
-// ── Realtime: refresh when bets / game_days change ───────────────────────────
+// ── Countdown timer (runs every second) ──────────────────────────────────────
+function updateCountdownText() {
+  const ms = msUntilCutoff();
+  const cutoffStr = formatTime(cutoffHour, cutoffMinute);
+
+  const formCd   = $('formCountdown');
+  const lockedCd = $('lockedCountdown');
+
+  let text, urgent = false;
+  if (ms <= 0) {
+    text = '⏰ Betting closed — awaiting results';
+  } else {
+    const h = Math.floor(ms/3600000);
+    const m = Math.floor((ms%3600000)/60000);
+    const s = Math.floor((ms%60000)/1000);
+    if (h > 0)       text = `⏰ ${h}h ${m}m left to bet (closes ${cutoffStr})`;
+    else if (m > 0)  text = `⏰ ${m}m ${s}s left to bet (closes ${cutoffStr})`;
+    else { text = `⏰ ${s}s left to bet!`; urgent = true; }
+  }
+
+  [formCd, lockedCd].forEach(el => {
+    if (!el) return;
+    el.textContent = text;
+    el.classList.toggle('urgent', urgent);
+  });
+
+  // If we just crossed the cutoff while page was open, refresh UI to flip state
+  if (ms <= 0 && !$('betForm').classList.contains('hidden')) refreshUI();
+}
+setInterval(updateCountdownText, 1000);
+
+// ── Realtime ─────────────────────────────────────────────────────────────────
 db.channel('rt-bets')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, refreshUI)
   .subscribe();
 db.channel('rt-games')
   .on('postgres_changes', { event: '*', schema: 'public', table: 'game_days' }, refreshUI)
   .subscribe();
+db.channel('rt-settings')
+  .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, async () => {
+    await loadSettings();
+    $('statCutoff').textContent = formatTime(cutoffHour, cutoffMinute);
+    updateCountdownText();
+  })
+  .subscribe();
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
+  await loadSettings();
   const { data: { session } } = await db.auth.getSession();
   currentUser = session?.user ?? null;
   await refreshUI();
