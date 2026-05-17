@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>235 Headcount Challenge</title>
+  <title>Headcount Challenge</title>
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -13,8 +13,8 @@
   <!-- HEADER -->
   <header>
     <div class="logo">
-      <span class="logo-icon"></span>
-      <span class="logo-text">235 HEADCOUNT<span class="logo-accent">CHALLENGE</span></span>
+      <span class="logo-icon">🏢</span>
+      <span class="logo-text">HEADCOUNT<span class="logo-accent">CHALLENGE</span></span>
     </div>
     <nav class="nav-auth" id="navAuth">
       <button class="btn btn-ghost" id="btnLogin">Log In</button>
@@ -59,7 +59,7 @@
       <!-- Bet button (logged in, no bet, betting open) -->
       <div id="betSection">
         <div class="bet-prompt hidden" id="betForm">
-          <p class="bet-instruction">How many people will show up before <strong>12:00 PM</strong> today?<br/>Exact number wins. Each entry costs <strong>$5</strong>.</p>
+          <p class="bet-instruction">How many people will show up before <strong>12:00 PM</strong> today?<br/>Exact number wins. Each entry costs <strong id="costInstruction">$5</strong>.</p>
           <button class="btn btn-gold btn-large" id="btnOpenKeypad">🎲 Place Your Bet</button>
           <div class="countdown-display" id="formCountdown"></div>
         </div>
@@ -106,6 +106,15 @@
             <button class="btn btn-ghost" id="btnSaveCutoff">Save</button>
           </div>
           <div class="admin-status" id="settingsStatus"></div>
+
+          <label class="admin-label" style="margin-top:1rem">Bet cost (per entry)</label>
+          <div class="admin-time-row">
+            <span class="cost-prefix">$</span>
+            <input type="number" id="betCostInput" class="bet-input small" min="0" max="999" step="1" />
+            <button class="btn btn-ghost" id="btnSaveBetCost">Save</button>
+          </div>
+          <p class="admin-warning">⚠️ Set this <strong>before</strong> betting opens. Changing it mid-game retroactively updates today's jackpot.</p>
+          <div class="admin-status" id="costStatus"></div>
         </div>
       </details>
 
@@ -139,6 +148,11 @@
               <tbody id="adminBetsBody"></tbody>
             </table>
           </div>
+          <div class="admin-save-row">
+            <span class="admin-pending" id="adminPendingHint"></span>
+            <button class="btn btn-primary" id="btnSavePaid" disabled>Save</button>
+          </div>
+          <div class="admin-status" id="paidStatus"></div>
         </div>
       </details>
     </div>
@@ -175,6 +189,7 @@
             <th>Actual Count</th>
             <th>Winner</th>
             <th>Jackpot</th>
+            <th class="admin-only"></th>
           </tr>
         </thead>
         <tbody id="historyBody"></tbody>
@@ -222,25 +237,44 @@
   <div class="modal-overlay hidden" id="keypadModal">
     <div class="modal keypad-modal">
       <button class="modal-close" id="closeKeypad">✕</button>
-      <h2>Pick Your Number</h2>
-      <p class="modal-sub">How many people before noon? <span class="hint">(0–500)</span></p>
-      <div class="keypad-display" id="keypadDisplay">—</div>
-      <div class="keypad-grid">
-        <button class="keypad-btn" data-digit="1">1</button>
-        <button class="keypad-btn" data-digit="2">2</button>
-        <button class="keypad-btn" data-digit="3">3</button>
-        <button class="keypad-btn" data-digit="4">4</button>
-        <button class="keypad-btn" data-digit="5">5</button>
-        <button class="keypad-btn" data-digit="6">6</button>
-        <button class="keypad-btn" data-digit="7">7</button>
-        <button class="keypad-btn" data-digit="8">8</button>
-        <button class="keypad-btn" data-digit="9">9</button>
-        <button class="keypad-btn keypad-alt" id="keypadClear">CLR</button>
-        <button class="keypad-btn" data-digit="0">0</button>
-        <button class="keypad-btn keypad-alt" id="keypadBack">⌫</button>
+
+      <!-- View 1: Pick a number -->
+      <div id="keypadPickView">
+        <h2>Pick Your Number</h2>
+        <p class="modal-sub">How many people before noon? <span class="hint">(0–500)</span></p>
+        <div class="keypad-display" id="keypadDisplay">—</div>
+        <div class="keypad-grid">
+          <button class="keypad-btn" data-digit="1">1</button>
+          <button class="keypad-btn" data-digit="2">2</button>
+          <button class="keypad-btn" data-digit="3">3</button>
+          <button class="keypad-btn" data-digit="4">4</button>
+          <button class="keypad-btn" data-digit="5">5</button>
+          <button class="keypad-btn" data-digit="6">6</button>
+          <button class="keypad-btn" data-digit="7">7</button>
+          <button class="keypad-btn" data-digit="8">8</button>
+          <button class="keypad-btn" data-digit="9">9</button>
+          <button class="keypad-btn keypad-alt" id="keypadClear">CLR</button>
+          <button class="keypad-btn" data-digit="0">0</button>
+          <button class="keypad-btn keypad-alt" id="keypadBack">⌫</button>
+        </div>
+        <button class="btn btn-gold full-width btn-large" id="keypadOk" disabled>OK</button>
+        <div class="form-error hidden" id="keypadError"></div>
       </div>
-      <button class="btn btn-gold full-width btn-large" id="keypadOk" disabled>🔒 Lock In ($5)</button>
-      <div class="form-error hidden" id="keypadError"></div>
+
+      <!-- View 2: Confirm before locking -->
+      <div id="keypadConfirmView" class="hidden">
+        <h2>Confirm Your Bet</h2>
+        <p class="confirm-prompt">You are locking in</p>
+        <div class="confirm-number" id="confirmNumber">—</div>
+        <p class="confirm-prompt">for <strong id="confirmDate">—</strong></p>
+        <div class="confirm-countdown" id="confirmCountdown">—</div>
+        <p class="confirm-fineprint">Bets are locked in and cannot be changed.<br/>Cost: <strong id="costFineprint">$5</strong> — pay the pit boss after locking in.</p>
+        <div class="confirm-buttons">
+          <button class="btn btn-ghost" id="confirmCancel">← Back</button>
+          <button class="btn btn-gold btn-large" id="confirmLock">🔒 Confirm Bet</button>
+        </div>
+        <div class="form-error hidden" id="confirmError"></div>
+      </div>
     </div>
   </div>
 
