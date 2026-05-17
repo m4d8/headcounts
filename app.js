@@ -4,16 +4,16 @@ const SUPABASE_URL      = 'https://wtgdzqdntauluvvtunfd.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_qo01DgyYTMT856qOfCrv8w_WsC3WCCF';
 
 // Game constants
-const BET_COST = 5;       // $5 per bet
 const BET_MAX  = 500;     // max guess value
 const FAKE_EMAIL_DOMAIN = 'headcount.local';  // synthesized email for username-only auth
 
 const usernameToFakeEmail = u => `${u.toLowerCase()}@${FAKE_EMAIL_DOMAIN}`;
 
-// Cutoff time is loaded from app_settings (admin editable). Defaults below
+// Runtime settings (loaded from app_settings; admin editable). Defaults below
 // are used only until the first load completes.
 let cutoffHour   = 11;
 let cutoffMinute = 30;
+let betCost      = 5;
 
 // ── Init ─────────────────────────────────────────────────────────────────────
 if (SUPABASE_URL.startsWith('YOUR_') || SUPABASE_ANON_KEY.startsWith('YOUR_')) {
@@ -156,8 +156,13 @@ async function loadSettings() {
   if (!data) return;
   const h = data.find(d => d.key === 'cutoff_hour');
   const m = data.find(d => d.key === 'cutoff_minute');
+  const c = data.find(d => d.key === 'bet_cost');
   if (h) cutoffHour   = parseInt(h.value, 10);
   if (m) cutoffMinute = parseInt(m.value, 10);
+  if (c) {
+    const parsed = parseFloat(c.value);
+    if (!isNaN(parsed) && parsed >= 0) betCost = parsed;
+  }
 }
 
 async function getProfile(userId) {
@@ -215,7 +220,8 @@ async function getStreakDaysNoWinner() {
 
 function computeJackpot(game) {
   if (!game) return 0;
-  return (Number(game.rollover_amount) || 0) + (game.bet_count || 0) * BET_COST;
+  // Only PAID bets contribute. Unpaid players are locked in but don't inflate the pot.
+  return (Number(game.rollover_amount) || 0) + (game.paid_count || 0) * betCost;
 }
 
 // ── Keypad ───────────────────────────────────────────────────────────────────
@@ -226,6 +232,9 @@ function openKeypad() {
   if (!isBettingOpen()) { alert('Betting is closed for today.'); return; }
   keypadValue = '';
   clearError('keypadError');
+  clearError('confirmError');
+  show('keypadPickView');
+  hide('keypadConfirmView');
   updateKeypadDisplay();
   show('keypadModal');
 }
@@ -262,13 +271,27 @@ $('btnOpenKeypad').addEventListener('click', openKeypad);
 // Keyboard support
 document.addEventListener('keydown', e => {
   if ($('keypadModal').classList.contains('hidden')) return;
+  const onConfirm = !$('keypadConfirmView').classList.contains('hidden');
+
+  if (e.key === 'Escape') {
+    if (onConfirm) { hide('keypadConfirmView'); show('keypadPickView'); }
+    else hide('keypadModal');
+    return;
+  }
+  if (e.key === 'Enter') {
+    if (onConfirm) { if (!$('confirmLock').disabled) $('confirmLock').click(); }
+    else if (!$('keypadOk').disabled) $('keypadOk').click();
+    return;
+  }
+
+  // Digit/backspace only on the picker view
+  if (onConfirm) return;
   if (/^[0-9]$/.test(e.key)) { handleDigit(e.key); e.preventDefault(); }
   else if (e.key === 'Backspace') { keypadValue = keypadValue.slice(0,-1); updateKeypadDisplay(); e.preventDefault(); }
-  else if (e.key === 'Escape')  { hide('keypadModal'); }
-  else if (e.key === 'Enter')   { if (!$('keypadOk').disabled) $('keypadOk').click(); }
 });
 
-$('keypadOk').addEventListener('click', async () => {
+// Step 1: OK → show confirmation view
+$('keypadOk').addEventListener('click', () => {
   clearError('keypadError');
   const val = parseInt(keypadValue, 10);
   if (isNaN(val) || val < 0 || val > BET_MAX) {
@@ -277,22 +300,45 @@ $('keypadOk').addEventListener('click', async () => {
   if (!todayGame) { setError('keypadError', 'No active game yet. Refresh and try again.'); return; }
   if (!isBettingOpen()) { setError('keypadError', 'Betting closed.'); return; }
 
-  $('keypadOk').disabled = true;
-  $('keypadOk').textContent = 'Locking in…';
+  $('confirmNumber').textContent = val;
+  $('confirmDate').textContent = formatDate(todayDate()) + "'s game";
+  clearError('confirmError');
+  hide('keypadPickView');
+  show('keypadConfirmView');
+  updateCountdownText(); // immediately populate the confirm countdown
+});
+
+// Cancel → back to keypad
+$('confirmCancel').addEventListener('click', () => {
+  hide('keypadConfirmView');
+  show('keypadPickView');
+});
+
+// Step 2: Confirm → actually insert the bet
+$('confirmLock').addEventListener('click', async () => {
+  clearError('confirmError');
+  const val = parseInt(keypadValue, 10);
+  if (!isBettingOpen()) { setError('confirmError', 'Betting just closed.'); return; }
+
+  $('confirmLock').disabled = true;
+  $('confirmLock').textContent = 'Locking in…';
   const { error } = await db.from('bets').insert({
     user_id: currentUser.id,
     game_day_id: todayGame.id,
     predicted_count: val
   });
-  $('keypadOk').textContent = '🔒 Lock In ($5)';
-  $('keypadOk').disabled = false;
+  $('confirmLock').disabled = false;
+  $('confirmLock').textContent = '🔒 Confirm Bet';
 
   if (error) {
-    if (error.code === '23505') setError('keypadError', 'You already placed a bet today!');
-    else setError('keypadError', error.message);
+    if (error.code === '23505') setError('confirmError', 'You already placed a bet today!');
+    else setError('confirmError', error.message);
     return;
   }
   hide('keypadModal');
+  // Reset views so next open starts on the picker
+  show('keypadPickView');
+  hide('keypadConfirmView');
   await refreshUI();
 });
 
@@ -311,6 +357,30 @@ $('btnSaveCutoff').addEventListener('click', async () => {
   if (error) { $('settingsStatus').textContent = 'Error: ' + error.message; return; }
   cutoffHour = h; cutoffMinute = m;
   $('settingsStatus').textContent = `✅ Saved — cutoff now ${formatTime(h, m)}`;
+  await refreshUI();
+});
+
+$('btnSaveBetCost').addEventListener('click', async () => {
+  const c = parseFloat($('betCostInput').value);
+  if (isNaN(c) || c < 0 || c > 999) {
+    $('costStatus').textContent = 'Invalid cost (0–999).'; return;
+  }
+  // Warn if there are paid bets that would be retroactively repriced
+  if (todayGame && (todayGame.paid_count || 0) > 0) {
+    const pc = todayGame.paid_count;
+    const ok = confirm(
+      `Heads up: ${pc} paid bet${pc!==1?'s have':' has'} already been counted toward today's jackpot. ` +
+      `Changing the price to $${c} will recalculate the pot for those paid bets. Continue?`
+    );
+    if (!ok) return;
+  }
+  $('costStatus').textContent = 'Saving…';
+  const { error } = await db.from('app_settings').upsert([
+    { key: 'bet_cost', value: String(c) }
+  ]);
+  if (error) { $('costStatus').textContent = 'Error: ' + error.message; return; }
+  betCost = c;
+  $('costStatus').textContent = `✅ Bet cost set to $${c}`;
   await refreshUI();
 });
 
@@ -351,7 +421,16 @@ $('btnResolve').addEventListener('click', async () => {
   await refreshUI();
 });
 
-// ── Admin: bets management (paid toggle, delete) ─────────────────────────────
+// ── Admin: bets management (paid toggle w/ Save, delete) ─────────────────────
+// Pending changes are held in memory until Save is pressed.
+const pendingPaid = new Map(); // betId -> desired paid boolean
+
+function updatePendingHint() {
+  const n = pendingPaid.size;
+  $('adminPendingHint').textContent = n === 0 ? '' : `${n} unsaved change${n !== 1 ? 's' : ''}`;
+  $('btnSavePaid').disabled = n === 0;
+}
+
 async function renderAdminBets() {
   if (!isAdmin || !todayGame) { return; }
   const { data: bets } = await db.from('bets')
@@ -363,39 +442,53 @@ async function renderAdminBets() {
 
   if (!bets || bets.length === 0) {
     tbody.innerHTML = '<tr><td colspan="4" class="muted">No bets yet today.</td></tr>';
+    updatePendingHint();
     return;
   }
+
+  // Drop pending entries for bets that no longer exist (e.g., deleted)
+  const existingIds = new Set(bets.map(b => b.id));
+  [...pendingPaid.keys()].forEach(id => { if (!existingIds.has(id)) pendingPaid.delete(id); });
 
   const userIds = [...new Set(bets.map(b => b.user_id))];
   const { data: profiles } = await db.from('profiles').select('id, username').in('id', userIds);
   const nameOf = id => profiles?.find(p => p.id === id)?.username || 'Unknown';
 
-  const paidCount = bets.filter(b => b.paid).length;
+  // Effective paid status accounts for any pending change
+  const effective = b => pendingPaid.has(b.id) ? pendingPaid.get(b.id) : !!b.paid;
+  const paidCount = bets.filter(effective).length;
   $('paidSummary').textContent = `${paidCount}/${bets.length} paid`;
 
   bets.forEach(b => {
+    const isPaid = effective(b);
+    const isPending = pendingPaid.has(b.id);
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td>${nameOf(b.user_id)}</td>
       <td><strong>${b.predicted_count}</strong></td>
       <td>
-        <label class="paid-toggle ${b.paid ? 'paid' : 'unpaid'}">
-          <input type="checkbox" data-paid-bet="${b.id}" ${b.paid ? 'checked' : ''} />
-          <span>${b.paid ? '✓ Paid' : 'Unpaid'}</span>
+        <label class="paid-toggle ${isPaid ? 'paid' : 'unpaid'} ${isPending ? 'pending' : ''}">
+          <input type="checkbox" data-paid-bet="${b.id}" ${isPaid ? 'checked' : ''} />
+          <span>${isPaid ? '✓ Paid' : 'Unpaid'}</span>
         </label>
       </td>
       <td><button class="btn-icon" data-delete-bet="${b.id}" title="Remove bet">🗑️</button></td>`;
     tbody.appendChild(tr);
   });
 
+  // Checkbox: stage change in pending map only — no DB write yet
   tbody.querySelectorAll('[data-paid-bet]').forEach(cb => {
-    cb.addEventListener('change', async () => {
+    cb.addEventListener('change', () => {
       const betId = cb.dataset.paidBet;
-      cb.disabled = true;
-      const { error } = await db.from('bets').update({ paid: cb.checked }).eq('id', betId);
-      cb.disabled = false;
-      if (error) { alert('Error updating: ' + error.message); cb.checked = !cb.checked; return; }
-      refreshUI();
+      const current = bets.find(x => x.id === betId);
+      const dbValue = !!current?.paid;
+      if (cb.checked === dbValue) {
+        pendingPaid.delete(betId);   // back to original — nothing to save
+      } else {
+        pendingPaid.set(betId, cb.checked);
+      }
+      // Re-render so styling (pending/paid/unpaid label) updates
+      renderAdminBets();
     });
   });
 
@@ -406,10 +499,38 @@ async function renderAdminBets() {
       const { error } = await db.from('bets').delete().eq('id', btn.dataset.deleteBet);
       btn.disabled = false;
       if (error) { alert('Error deleting: ' + error.message); return; }
+      pendingPaid.delete(btn.dataset.deleteBet);
       refreshUI();
     });
   });
+
+  updatePendingHint();
 }
+
+// Save button: commit all pending paid changes
+$('btnSavePaid').addEventListener('click', async () => {
+  if (pendingPaid.size === 0) return;
+  $('btnSavePaid').disabled = true;
+  $('btnSavePaid').textContent = 'Saving…';
+  $('paidStatus').textContent = '';
+
+  const entries = [...pendingPaid.entries()];
+  let failed = 0;
+  for (const [betId, paid] of entries) {
+    const { error } = await db.from('bets').update({ paid }).eq('id', betId);
+    if (error) failed++;
+    else pendingPaid.delete(betId);
+  }
+
+  $('btnSavePaid').textContent = 'Save';
+  if (failed > 0) {
+    $('paidStatus').textContent = `⚠️ ${failed} change${failed!==1?'s':''} failed to save.`;
+  } else {
+    $('paidStatus').textContent = `✅ Saved ${entries.length} change${entries.length!==1?'s':''}.`;
+    setTimeout(() => { if ($('paidStatus')) $('paidStatus').textContent = ''; }, 3000);
+  }
+  await refreshUI();
+});
 
 // ── Render UI ────────────────────────────────────────────────────────────────
 async function refreshUI() {
@@ -418,6 +539,9 @@ async function refreshUI() {
   $('statCutoff').textContent = formatTime(cutoffHour, cutoffMinute);
   $('cutoffHourInput').value   = cutoffHour;
   $('cutoffMinuteInput').value = cutoffMinute;
+  $('betCostInput').value      = betCost;
+  $('costInstruction').textContent = `$${betCost}`;
+  $('costFineprint').textContent   = `$${betCost}`;
 
   if (currentUser) {
     hide('navAuth'); show('navUser');
@@ -430,18 +554,31 @@ async function refreshUI() {
     isAdmin = false;
   }
   isAdmin ? show('adminPanel') : hide('adminPanel');
+  document.body.classList.toggle('is-admin', isAdmin);
 
   todayGame = await getOrCreateTodayGame();
-  const jackpot = computeJackpot(todayGame);
-  const betCount = todayGame?.bet_count || 0;
-  const streak = await getStreakDaysNoWinner();
+  const jackpot   = computeJackpot(todayGame);
+  const betCount  = todayGame?.bet_count  || 0;
+  const paidCount = todayGame?.paid_count || 0;
+  const streak    = await getStreakDaysNoWinner();
 
-  $('statBetCount').textContent = betCount;
+  // "Players In" reflects paid players (the ones actually in the pot).
+  // If unpaid bets are outstanding, append a hint so it's not confusing.
+  $('statBetCount').textContent = paidCount;
   $('statStreak').textContent = streak;
   $('jackpotAmount').textContent = `$${jackpot}`;
-  $('jackpotSub').textContent = betCount === 0
-    ? 'Be the first to bet and grow the pot!'
-    : `${betCount} player${betCount !== 1 ? 's' : ''} in — pot keeps growing!`;
+
+  const unpaid = betCount - paidCount;
+  if (paidCount === 0 && unpaid === 0) {
+    $('jackpotSub').textContent = 'Be the first to bet and grow the pot!';
+  } else if (paidCount === 0 && unpaid > 0) {
+    $('jackpotSub').textContent = `${unpaid} bet${unpaid !== 1 ? 's' : ''} placed — pot grows once the pit boss confirms payment.`;
+  } else {
+    let txt = `${paidCount} player${paidCount !== 1 ? 's' : ''} paid in`;
+    if (unpaid > 0) txt += ` (${unpaid} unpaid)`;
+    txt += ' — pot keeps growing!';
+    $('jackpotSub').textContent = txt;
+  }
 
   if (todayGame?.is_resolved) {
     await renderResolvedState(todayGame, jackpot);
@@ -493,10 +630,10 @@ async function renderBetSection() {
     $('lockedDate').textContent = formatDate(todayDate());
     const paidEl = $('lockedPayment');
     if (userBet.paid) {
-      paidEl.textContent = '✓ Payment received';
+      paidEl.textContent = '✅ PAID';
       paidEl.className = 'locked-payment paid';
     } else {
-      paidEl.textContent = `💵 Pay $${BET_COST} to admin to confirm entry`;
+      paidEl.textContent = `💵 Pay $${betCost} to the pit boss to confirm entry`;
       paidEl.className = 'locked-payment unpaid';
     }
     show('betLocked');
@@ -542,7 +679,7 @@ async function renderAllBets(game) {
 // ── History Chart & Table ────────────────────────────────────────────────────
 async function renderHistory() {
   const { data: games } = await db.from('game_days')
-    .select('game_date, actual_count, jackpot_amount, winner_user_id')
+    .select('id, game_date, actual_count, jackpot_amount, winner_user_id')
     .eq('is_resolved', true)
     .order('game_date', { ascending: false }).limit(30);
 
@@ -604,8 +741,27 @@ async function renderHistory() {
       <td>${formatDate(g.game_date)}</td>
       <td><strong>${g.actual_count}</strong></td>
       <td>${wn ? `<span class="tag-winner">🏆 ${wn}</span>` : `<span class="tag-miss">No winners</span>`}</td>
-      <td>$${g.jackpot_amount}</td>`;
+      <td>$${g.jackpot_amount}</td>
+      <td class="admin-only"><button class="btn-icon" data-delete-game="${g.id}" data-delete-date="${g.game_date}" title="Delete this game day">🗑️</button></td>`;
     tbody.appendChild(tr);
+  });
+
+  // Admin: delete a past game day
+  tbody.querySelectorAll('[data-delete-game]').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.deleteGame;
+      const dateStr = formatDate(btn.dataset.deleteDate);
+      if (!confirm(
+        `Delete ${dateStr}?\n\n` +
+        `This permanently removes the game day AND all bets placed on it. ` +
+        `Cannot be undone.`
+      )) return;
+      btn.disabled = true;
+      const { error } = await db.from('game_days').delete().eq('id', id);
+      btn.disabled = false;
+      if (error) { alert('Error deleting: ' + error.message); return; }
+      await refreshUI();
+    });
   });
 }
 
@@ -642,19 +798,25 @@ function updateCountdownText() {
   const ms = msUntilCutoff();
   const cutoffStr = formatTime(cutoffHour, cutoffMinute);
 
-  const formCd   = $('formCountdown');
-  const lockedCd = $('lockedCountdown');
+  const formCd    = $('formCountdown');
+  const lockedCd  = $('lockedCountdown');
+  const confirmCd = $('confirmCountdown');
 
-  let text, urgent = false;
+  let text, confirmText, urgent = false;
   if (ms <= 0) {
     text = '⏰ Betting closed — awaiting results';
+    confirmText = '⏰ Betting just closed!';
   } else {
     const h = Math.floor(ms/3600000);
     const m = Math.floor((ms%3600000)/60000);
     const s = Math.floor((ms%60000)/1000);
-    if (h > 0)       text = `⏰ ${h}h ${m}m left to bet (closes ${cutoffStr})`;
-    else if (m > 0)  text = `⏰ ${m}m ${s}s left to bet (closes ${cutoffStr})`;
-    else { text = `⏰ ${s}s left to bet!`; urgent = true; }
+    if (h > 0)       { text = `⏰ ${h}h ${m}m left to bet (closes ${cutoffStr})`;
+                       confirmText = `⏰ Game ends in ${h}h ${m}m (${cutoffStr})`; }
+    else if (m > 0)  { text = `⏰ ${m}m ${s}s left to bet (closes ${cutoffStr})`;
+                       confirmText = `⏰ Game ends in ${m}m ${s}s`; }
+    else             { text = `⏰ ${s}s left to bet!`;
+                       confirmText = `⏰ Only ${s}s left!`;
+                       urgent = true; }
   }
 
   [formCd, lockedCd].forEach(el => {
@@ -662,6 +824,10 @@ function updateCountdownText() {
     el.textContent = text;
     el.classList.toggle('urgent', urgent);
   });
+  if (confirmCd) {
+    confirmCd.textContent = confirmText;
+    confirmCd.classList.toggle('urgent', urgent);
+  }
 
   // If we just crossed the cutoff while page was open, refresh UI to flip state
   if (ms <= 0 && !$('betForm').classList.contains('hidden')) refreshUI();
