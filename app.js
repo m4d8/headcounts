@@ -6,6 +6,9 @@ const SUPABASE_ANON_KEY = 'sb_publishable_qo01DgyYTMT856qOfCrv8w_WsC3WCCF';
 // Game constants
 const BET_COST = 5;       // $5 per bet
 const BET_MAX  = 500;     // max guess value
+const FAKE_EMAIL_DOMAIN = 'headcount.local';  // synthesized email for username-only auth
+
+const usernameToFakeEmail = u => `${u.toLowerCase()}@${FAKE_EMAIL_DOMAIN}`;
 
 // Cutoff time is loaded from app_settings (admin editable). Defaults below
 // are used only until the first load completes.
@@ -76,39 +79,70 @@ $('switchToLogin').addEventListener('click', e => { e.preventDefault(); hide('re
 
 $('submitLogin').addEventListener('click', async () => {
   clearError('loginError');
-  const email = $('loginEmail').value.trim();
-  const pass  = $('loginPassword').value;
-  if (!email || !pass) { setError('loginError', 'Please fill in all fields.'); return; }
+  const username = $('loginUsername').value.trim();
+  const pass     = $('loginPassword').value;
+  if (!username || !pass) { setError('loginError', 'Please fill in all fields.'); return; }
+
   $('submitLogin').disabled = true;
   $('submitLogin').textContent = 'Logging in…';
-  const { error } = await db.auth.signInWithPassword({ email, password: pass });
+  const { error } = await db.auth.signInWithPassword({
+    email: usernameToFakeEmail(username),
+    password: pass
+  });
   $('submitLogin').disabled = false;
   $('submitLogin').textContent = 'Log In';
-  if (error) { setError('loginError', error.message); return; }
+
+  if (error) {
+    if (/invalid login/i.test(error.message)) {
+      setError('loginError', 'Wrong username or password.');
+    } else if (/email.*not.*confirmed/i.test(error.message)) {
+      setError('loginError',
+        'Email confirmation is still ON in Supabase. Go to Auth → Sign In / Providers → Email and turn off "Confirm email".');
+    } else {
+      setError('loginError', error.message);
+    }
+    return;
+  }
   hide('loginModal');
 });
 
 $('submitRegister').addEventListener('click', async () => {
   clearError('registerError');
   const username = $('regUsername').value.trim();
-  const email    = $('regEmail').value.trim();
   const pass     = $('regPassword').value;
-  if (!username || !email || !pass) { setError('registerError', 'Please fill in all fields.'); return; }
+  if (!username || !pass) { setError('registerError', 'Please fill in all fields.'); return; }
   if (pass.length < 6) { setError('registerError', 'Password must be at least 6 characters.'); return; }
   if (!/^[a-zA-Z0-9_]{2,24}$/.test(username)) {
     setError('registerError', 'Username: 2-24 letters, numbers, or underscores.'); return;
   }
+
   $('submitRegister').disabled = true;
   $('submitRegister').textContent = 'Creating account…';
   const { data, error } = await db.auth.signUp({
-    email, password: pass,
+    email: usernameToFakeEmail(username),
+    password: pass,
     options: { data: { username } }
   });
   $('submitRegister').disabled = false;
   $('submitRegister').textContent = 'Create Account';
-  if (error) { setError('registerError', error.message); return; }
-  hide('registerModal');
-  if (!data.session) alert('Account created! Check your email to confirm, then log in.');
+
+  if (error) {
+    if (/already registered|already exists|duplicate/i.test(error.message)) {
+      setError('registerError', 'That username is already taken.');
+    } else {
+      setError('registerError', error.message);
+    }
+    return;
+  }
+
+  if (data.session) {
+    hide('registerModal');
+  } else {
+    // Email confirmation is still on — synthetic emails can't be confirmed
+    setError('registerError',
+      '⚠️ Email confirmation is still enabled in Supabase. Username-only login needs it OFF: ' +
+      'Supabase → Auth → Sign In / Providers → Email → turn off "Confirm email", then try again.');
+  }
 });
 
 db.auth.onAuthStateChange(async (_event, session) => {
