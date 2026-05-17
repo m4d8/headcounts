@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Headcount Challenge</title>
+  <title>235 Headcount Challenge</title>
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -13,8 +13,8 @@
   <!-- HEADER -->
   <header>
     <div class="logo">
-      <span class="logo-icon">🏢</span>
-      <span class="logo-text">HEADCOUNT<span class="logo-accent">CHALLENGE</span></span>
+      <span class="logo-icon"></span>
+      <span class="logo-text">235 HEADCOUNT<span class="logo-accent">CHALLENGE</span></span>
     </div>
     <nav class="nav-auth" id="navAuth">
       <button class="btn btn-ghost" id="btnLogin">Log In</button>
@@ -196,7 +196,7 @@
       <button class="modal-close" id="closeLogin">✕</button>
       <h2>Welcome Back</h2>
       <p class="modal-sub">Log in to place your bet</p>
-      <input type="email" id="loginEmail" class="form-input" placeholder="Email" autocomplete="email" />
+      <input type="text" id="loginUsername" class="form-input" placeholder="Username" autocomplete="username" autocapitalize="none" />
       <input type="password" id="loginPassword" class="form-input" placeholder="Password" autocomplete="current-password" />
       <button class="btn btn-gold full-width" id="submitLogin">Log In</button>
       <p class="modal-footer">No account? <a href="#" id="switchToRegister">Register here</a></p>
@@ -209,9 +209,8 @@
     <div class="modal">
       <button class="modal-close" id="closeRegister">✕</button>
       <h2>Create Account</h2>
-      <p class="modal-sub">Join the game — it's free to play!</p>
-      <input type="text" id="regUsername" class="form-input" placeholder="Username (shown to others)" autocomplete="username" />
-      <input type="email" id="regEmail" class="form-input" placeholder="Email" autocomplete="email" />
+      <p class="modal-sub">Just pick a username and password</p>
+      <input type="text" id="regUsername" class="form-input" placeholder="Username (shown to others)" autocomplete="username" autocapitalize="none" />
       <input type="password" id="regPassword" class="form-input" placeholder="Password (min 6 chars)" autocomplete="new-password" />
       <button class="btn btn-gold full-width" id="submitRegister">Create Account</button>
       <p class="modal-footer">Have an account? <a href="#" id="switchToLogin">Log in here</a></p>
