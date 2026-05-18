@@ -6,6 +6,7 @@ const SUPABASE_ANON_KEY = 'sb_publishable_qo01DgyYTMT856qOfCrv8w_WsC3WCCF';
 // Game constants
 const BET_MAX  = 500;     // max guess value
 const FAKE_EMAIL_DOMAIN = 'headcount.local';  // synthesized email for username-only auth
+const INVITE_CODE = 'magic123';  // required to register (client-side gate — fine for friendly use)
 
 const usernameToFakeEmail = u => `${u.toLowerCase()}@${FAKE_EMAIL_DOMAIN}`;
 
@@ -68,6 +69,8 @@ function clearError(elId)    { $(elId).classList.add('hidden'); }
 // ── Auth UI ──────────────────────────────────────────────────────────────────
 $('btnLogin').addEventListener('click', () => { clearError('loginError'); show('loginModal'); });
 $('btnRegister').addEventListener('click', () => { clearError('registerError'); show('registerModal'); });
+$('btnWelcomeLogin').addEventListener('click', () => { clearError('loginError'); show('loginModal'); });
+$('btnWelcomeRegister').addEventListener('click', () => { clearError('registerError'); show('registerModal'); });
 $('btnLogout').addEventListener('click', async () => { await db.auth.signOut(); });
 $('closeLogin').addEventListener('click', () => hide('loginModal'));
 $('closeRegister').addEventListener('click', () => hide('registerModal'));
@@ -133,9 +136,14 @@ $('submitLogin').addEventListener('click', async () => {
 
 $('submitRegister').addEventListener('click', async () => {
   clearError('registerError');
+  const invite   = $('regInvite').value.trim();
   const username = $('regUsername').value.trim();
   const pass     = $('regPassword').value;
-  if (!username || !pass) { setError('registerError', 'Please fill in all fields.'); return; }
+  if (!invite || !username || !pass) { setError('registerError', 'Please fill in all fields.'); return; }
+  if (invite !== INVITE_CODE) {
+    setError('registerError', 'Invalid invite code. Ask the pit boss for the correct code.');
+    return;
+  }
   if (pass.length < 6) { setError('registerError', 'Password must be at least 6 characters.'); return; }
   if (!/^[a-zA-Z0-9_]{2,24}$/.test(username)) {
     setError('registerError', 'Username: 2-24 letters, numbers, or underscores.'); return;
@@ -593,6 +601,14 @@ async function refreshUI() {
   }
   isAdmin ? show('adminPanel') : hide('adminPanel');
   document.body.classList.toggle('is-admin', isAdmin);
+  document.body.classList.toggle('is-logged-in', !!currentUser);
+
+  // When logged out, skip the rest — none of those sections are visible anyway,
+  // and we don't want anonymous users hitting the DB
+  if (!currentUser) {
+    if (historyChart) { historyChart.destroy(); historyChart = null; }
+    return;
+  }
 
   todayGame = await getOrCreateTodayGame();
   const jackpot   = computeJackpot(todayGame);
