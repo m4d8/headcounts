@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Headcount Challenge</title>
+  <title>235HeadcountChallenge</title>
   <link rel="stylesheet" href="style.css" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
@@ -13,7 +13,8 @@
   <!-- HEADER -->
   <header>
     <div class="logo">
-      <span class="logo-text">235HEADCOUNT<span class="logo-accent">CHALLENGE</span></span>
+      <span class="logo-icon">🏢</span>
+      <span class="logo-text">235Headcount<span class="logo-accent">Challenge</span></span>
     </div>
     <nav class="nav-auth" id="navAuth">
       <button class="btn btn-ghost" id="btnLogin">Log In</button>
@@ -25,15 +26,29 @@
     </div>
   </header>
 
+  <!-- LOGGED-OUT WELCOME (only visible when not signed in) -->
+  <section class="welcome-section logged-out-only" id="welcomeSection">
+    <div class="welcome-card">
+      <div class="welcome-icon">🎲</div>
+      <h1 class="welcome-title">235Headcount<span class="logo-accent">Challenge</span></h1>
+      <p class="welcome-tagline">Private game. Sign in or register to play.</p>
+      <p class="welcome-note">🔒 Invite-only — you'll need a code from the pit boss.</p>
+      <div class="welcome-buttons">
+        <button class="btn btn-gold btn-large" id="btnWelcomeRegister">Register</button>
+        <button class="btn btn-ghost btn-large" id="btnWelcomeLogin">I have an account</button>
+      </div>
+    </div>
+  </section>
+
   <!-- JACKPOT HERO -->
-  <section class="hero">
+  <section class="hero auth-only">
     <div class="jackpot-label">💰 JACKPOT IS NOW</div>
     <div class="jackpot-amount" id="jackpotAmount">$0</div>
     <div class="jackpot-sub" id="jackpotSub">Be the first to bet and grow the pot!</div>
   </section>
 
   <!-- TODAY'S GAME -->
-  <section class="today-section">
+  <section class="today-section auth-only">
     <div class="today-card">
       <div class="today-header">
         <h2>📅 Today's Game</h2>
@@ -97,16 +112,16 @@
       <details class="admin-section" open>
         <summary>⚙️ Game Settings</summary>
         <div class="admin-section-body">
-          <label class="admin-label">Bet cutoff time (24-hour)</label>
+          <label class="admin-label" for="cutoffHourInput">Bet cutoff time (24-hour)</label>
           <div class="admin-time-row">
-            <input type="number" id="cutoffHourInput" class="bet-input small" min="0" max="23" />
+            <input type="number" id="cutoffHourInput" class="bet-input small" min="0" max="23" aria-label="Cutoff hour" />
             <span class="time-sep">:</span>
-            <input type="number" id="cutoffMinuteInput" class="bet-input small" min="0" max="59" />
+            <input type="number" id="cutoffMinuteInput" class="bet-input small" min="0" max="59" aria-label="Cutoff minute" />
             <button class="btn btn-ghost" id="btnSaveCutoff">Save</button>
           </div>
           <div class="admin-status" id="settingsStatus"></div>
 
-          <label class="admin-label" style="margin-top:1rem">Bet cost (per entry)</label>
+          <label class="admin-label" for="betCostInput" style="margin-top:1rem">Bet cost (per entry)</label>
           <div class="admin-time-row">
             <span class="cost-prefix">$</span>
             <input type="number" id="betCostInput" class="bet-input small" min="0" max="999" step="1" />
@@ -158,7 +173,7 @@
   </section>
 
   <!-- ALL BETS (after resolution) -->
-  <section class="bets-section hidden" id="betsSection">
+  <section class="bets-section auth-only hidden" id="betsSection">
     <h2>📋 Today's Bets</h2>
     <div class="bets-table-wrap">
       <table class="bets-table" id="betsTable">
@@ -175,7 +190,7 @@
   </section>
 
   <!-- HISTORY CHART -->
-  <section class="history-section">
+  <section class="history-section auth-only">
     <h2>📊 Game History</h2>
     <div class="chart-wrap">
       <canvas id="historyChart"></canvas>
@@ -197,7 +212,7 @@
   </section>
 
   <!-- LEADERBOARD -->
-  <section class="leaderboard-section">
+  <section class="leaderboard-section auth-only">
     <h2>🏆 Leaderboard</h2>
     <div class="leaderboard-list" id="leaderboardList">
       <p class="muted">No winners yet. Be the first!</p>
@@ -223,7 +238,8 @@
     <div class="modal">
       <button class="modal-close" id="closeRegister">✕</button>
       <h2>Create Account</h2>
-      <p class="modal-sub">Just pick a username and password</p>
+      <p class="modal-sub">Invite-only — get the code from the pit boss</p>
+      <input type="text" id="regInvite" class="form-input" placeholder="Invite code" autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" />
       <input type="text" id="regUsername" class="form-input" placeholder="Username (shown to others)" autocomplete="username" autocapitalize="none" />
       <input type="password" id="regPassword" class="form-input" placeholder="Password (min 6 chars)" autocomplete="new-password" />
       <button class="btn btn-gold full-width" id="submitRegister">Create Account</button>
@@ -278,7 +294,7 @@
   </div>
 
   <footer>
-    <p>Good luck!</p>
+    <p>Good Luck!</p>
   </footer>
 
   <script src="app.js"></script>
