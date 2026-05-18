@@ -77,6 +77,18 @@ $('switchToLogin').addEventListener('click', e => { e.preventDefault(); hide('re
   $(id).addEventListener('click', e => { if (e.target === $(id)) hide(id); });
 });
 
+// Race any promise against a timeout. Lets us surface a clear error
+// instead of silently spinning forever on network/Supabase issues.
+function withTimeout(promise, ms, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms/1000}s. Check your internet, then hard-refresh (Cmd+Shift+R). If the issue persists, your Supabase project may be paused — check the dashboard.`)),
+      ms
+    ))
+  ]);
+}
+
 $('submitLogin').addEventListener('click', async () => {
   clearError('loginError');
   const username = $('loginUsername').value.trim();
@@ -85,13 +97,26 @@ $('submitLogin').addEventListener('click', async () => {
 
   $('submitLogin').disabled = true;
   $('submitLogin').textContent = 'Logging in…';
-  const { error } = await db.auth.signInWithPassword({
-    email: usernameToFakeEmail(username),
-    password: pass
-  });
+  let result;
+  try {
+    result = await withTimeout(
+      db.auth.signInWithPassword({
+        email: usernameToFakeEmail(username),
+        password: pass
+      }),
+      15000,
+      'Login'
+    );
+  } catch (e) {
+    $('submitLogin').disabled = false;
+    $('submitLogin').textContent = 'Log In';
+    setError('loginError', e.message);
+    return;
+  }
   $('submitLogin').disabled = false;
   $('submitLogin').textContent = 'Log In';
 
+  const { error } = result;
   if (error) {
     if (/invalid login/i.test(error.message)) {
       setError('loginError', 'Wrong username or password.');
@@ -118,11 +143,23 @@ $('submitRegister').addEventListener('click', async () => {
 
   $('submitRegister').disabled = true;
   $('submitRegister').textContent = 'Creating account…';
-  const { data, error } = await db.auth.signUp({
-    email: usernameToFakeEmail(username),
-    password: pass,
-    options: { data: { username } }
-  });
+  let data, error;
+  try {
+    ({ data, error } = await withTimeout(
+      db.auth.signUp({
+        email: usernameToFakeEmail(username),
+        password: pass,
+        options: { data: { username } }
+      }),
+      15000,
+      'Registration'
+    ));
+  } catch (e) {
+    $('submitRegister').disabled = false;
+    $('submitRegister').textContent = 'Create Account';
+    setError('registerError', e.message);
+    return;
+  }
   $('submitRegister').disabled = false;
   $('submitRegister').textContent = 'Create Account';
 
@@ -145,9 +182,10 @@ $('submitRegister').addEventListener('click', async () => {
   }
 });
 
-db.auth.onAuthStateChange(async (_event, session) => {
+db.auth.onAuthStateChange((_event, session) => {
   currentUser = session?.user ?? null;
-  await refreshUI();
+  // Fire-and-forget so a slow refresh never blocks the auth state machine
+  refreshUI().catch(err => console.error('refreshUI failed:', err));
 });
 
 // ── Data layer ───────────────────────────────────────────────────────────────
@@ -835,19 +873,31 @@ function updateCountdownText() {
 setInterval(updateCountdownText, 1000);
 
 // ── Realtime ─────────────────────────────────────────────────────────────────
-db.channel('rt-bets')
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, refreshUI)
-  .subscribe();
-db.channel('rt-games')
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'game_days' }, refreshUI)
-  .subscribe();
-db.channel('rt-settings')
-  .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, async () => {
-    await loadSettings();
-    $('statCutoff').textContent = formatTime(cutoffHour, cutoffMinute);
-    updateCountdownText();
-  })
-  .subscribe();
+// Subscribed lazily AFTER first refreshUI so the auth flow isn't blocked.
+// (In supabase-js v2, subscribing at page-load can stall signInWithPassword
+//  promise resolution if the websocket hasn't settled.)
+let realtimeStarted = false;
+function startRealtime() {
+  if (realtimeStarted) return;
+  realtimeStarted = true;
+  try {
+    db.channel('rt-bets')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'bets' }, refreshUI)
+      .subscribe();
+    db.channel('rt-games')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'game_days' }, refreshUI)
+      .subscribe();
+    db.channel('rt-settings')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_settings' }, async () => {
+        await loadSettings();
+        $('statCutoff').textContent = formatTime(cutoffHour, cutoffMinute);
+        updateCountdownText();
+      })
+      .subscribe();
+  } catch (e) {
+    console.warn('Realtime subscribe failed (non-fatal):', e);
+  }
+}
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
 (async () => {
@@ -855,4 +905,6 @@ db.channel('rt-settings')
   const { data: { session } } = await db.auth.getSession();
   currentUser = session?.user ?? null;
   await refreshUI();
+  // Defer realtime subscription until after first paint so it can't stall auth
+  setTimeout(startRealtime, 500);
 })();
